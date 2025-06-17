@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="id">
+<head><meta charset="UTF-8"><title>Kelola MK</title></head>
+<body>
+  <h1>Kelola Mata Kuliah</h1>
+  <a href="{{ url_for('add_mk') }}">[+] Tambah</a> | <a href="{{ url_for('jadwal') }}">Kembali</a><hr>
+  <table border="1">
+    <tr><th>Kode</th><th>Nama</th><th>Ruang</th><th>Aksi</th></tr>
+    {% for mk in mk_list %}
+    <tr>
+      <td>{{ mk.kode }}</td><td>{{ mk.nama }}</td><td>{{ mk.ruangan }}</td>
+      <td>
+        <a href="{{ url_for('edit_mk', kode=mk.kode) }}">Edit</a> |
+        <form style="display:inline" method="POST" action="{{ url_for('delete_mk', kode=mk.kode) }}">
+          <button type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

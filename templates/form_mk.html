@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="id">
+<head><meta charset="UTF-8"><title>{{ mode }} MK</title></head>
+<body>
+  <h1>{{ mode }} Mata Kuliah</h1>
+  <form method="POST">
+    {% if mode == "Add" %}
+      Kode: <input name="kode" required><br>
+    {% else %}
+      Kode: <b>{{ mk.kode }}</b><br>
+    {% endif %}
+    Nama: <input name="nama" value="{{ mk.nama if mk }}" required><br>
+    Ruang: <input name="ruangan" value="{{ mk.ruangan if mk }}"><br>
+    <button type="submit">{{ mode }}</button>
+  </form>
+  <a href="{{ url_for('list_mk') }}">Kembali</a>
+</body>
+</html>
