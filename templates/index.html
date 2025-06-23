@@ -47,6 +47,8 @@
       <li><strong>Waktu pembuatan konflik:</strong> {{ exec_graph }}</li>
       <li><strong>Waktu pewarnaan graf:</strong> {{ exec_coloring }}</li>
       <p><strong>Total waktu komputasi:</strong> {{ exec_time }}</p>
+      <li><strong>Latensi Total:</strong> {{ latency }}</li>
+      <li><strong>Throughput:</strong> {{ throughput }}</li>
       <li><strong>Pewarnaan:</strong>
         <ul class="info-list">
           {% for mk, slot in pewarnaan.items() %}
@@ -56,6 +58,10 @@
       </li>
     </ul>
   </div>
+
+  <h3>Visualisasi Pewarnaan Graf</h3>
+  <img src="data:image/png;base64,{{ graph_img }}" alt="Graf Pewarnaan" style="max-width:100%; border:1px solid #ccc; border-radius:8px; margin-top:10px;" />
+
 
   <!-- Tampilkan semua slot dari 0..chromatic_number-1 -->
   {% for s in range(chromatic_number) %}

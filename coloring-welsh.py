@@ -81,11 +81,24 @@ def build_graph():
     duration = time.time() - start
     return G, duration
 
-def greedy_chromatic_number(G):
+def welsh_powell_coloring(G):
     start = time.time()
-    coloring = nx.coloring.greedy_color(G, strategy="largest_first")
+    nodes_sorted = sorted(G.nodes(), key=lambda x: G.degree(x), reverse=True)
+    coloring = {}
+    current_color = 0
+    for node in nodes_sorted:
+        if node in coloring:
+            continue
+        coloring[node] = current_color
+        for other in nodes_sorted:
+            if other not in coloring and all(
+                neighbor not in coloring or coloring[neighbor] != current_color
+                for neighbor in G.neighbors(other)
+            ):
+                coloring[other] = current_color
+        current_color += 1
     duration = time.time() - start
-    num_colors = max(coloring.values()) + 1 if coloring else 0
+    num_colors = current_color
     return num_colors, coloring, duration
 
 def slot_to_hari_jam(slot):
@@ -133,17 +146,15 @@ def render_colored_graph(G, coloring):
 @login_required
 def jadwal():
     total_start = time.time()
-
     G, time_graph = build_graph()
-    chromatic_num, pewarnaan, time_coloring = greedy_chromatic_number(G)
-
+    chromatic_num, pewarnaan, time_coloring = welsh_powell_coloring(G)
     total_exec_time = time.time() - total_start
 
-    graph_img = render_colored_graph(G, pewarnaan)
+    graph_img = render_colored_graph(G, pewarnaan)  # Tambahan ini
 
-    latency = total_exec_time
+    latency = total_exec_time  # dalam detik
     jumlah_konflik = G.number_of_edges()
-    throughput = jumlah_konflik / latency if latency > 0 else 0
+    throughput = jumlah_konflik / latency if latency > 0 else 0  # edge per detik
 
     return render_template("index.html",
         slot_map=fetch_jadwal_info(),
@@ -156,7 +167,7 @@ def jadwal():
         exec_time=f"{total_exec_time:.4f} detik",
         exec_graph=f"{time_graph:.4f} detik",
         exec_coloring=f"{time_coloring:.4f} detik",
-        graph_img=graph_img,
+        graph_img=graph_img,  # Tambahkan ini
         latency=f"{latency:.4f} detik",
         throughput=f"{throughput:.2f} edge/detik",
     )
@@ -169,12 +180,11 @@ def sinkron_pewarnaan():
         return redirect(url_for("jadwal"))
 
     G, _ = build_graph()
-    _, pewarnaan, _ = greedy_chromatic_number(G)
+    _, pewarnaan, _ = welsh_powell_coloring(G)
 
     with driver.session() as session:
         for kode, slot in pewarnaan.items():
             hari, jam_mulai, jam_selesai = slot_to_hari_jam(slot)
-
             session.run("MATCH (c:MataKuliah {kode:$kode})-[r:DIJADWALKAN]->() DELETE r", kode=kode)
             session.run("""
                 MERGE (j:Jadwal {slot:$slot})
