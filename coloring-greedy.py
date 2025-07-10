@@ -13,10 +13,13 @@ import base64
 app = Flask(__name__)
 app.secret_key = "secretkey"
 
-# Neo4j
-driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "12345678"))
+# === Neo4j setup ===
+driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "admin123"))
 
-# Login setup
+def get_session():
+    return driver.session(database="grafcoloring")
+
+# === Login setup ===
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
@@ -28,7 +31,7 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    with driver.session() as s:
+    with get_session() as s:
         r = s.run(
             "MATCH (u:User {id:$id}) RETURN u.id AS id, u.nama AS nama, u.role AS role",
             id=user_id
@@ -37,38 +40,38 @@ def load_user(user_id):
         return User(r["id"], r["nama"], r["role"])
     return None
 
-# === Graph Functions ===
+# === Graph Coloring Functions ===
 
 def fetch_conflicts():
-    with driver.session() as session:
-        session.run("MATCH (:MataKuliah)-[r:BERTABRAKAN_DOSEN]->(:MataKuliah) DELETE r").consume()
-        session.run("MATCH (:MataKuliah)-[r:BERTABRAKAN_MAHASISWA]->(:MataKuliah) DELETE r").consume()
-        session.run("MATCH (:MataKuliah)-[r:BERTABRAKAN_RUANGAN]->(:MataKuliah) DELETE r").consume()
+    with get_session() as session:
+        session.run("MATCH (:MataKuliah)-[r:BERTABRAKAN_DOSEN]->(:MataKuliah) DELETE r")
+        session.run("MATCH (:MataKuliah)-[r:BERTABRAKAN_MAHASISWA]->(:MataKuliah) DELETE r")
+        session.run("MATCH (:MataKuliah)-[r:BERTABRAKAN_RUANGAN]->(:MataKuliah) DELETE r")
 
+        # Mahasiswa
         session.run("""
             MATCH (m:User {role:'Mahasiswa'})-[:MENGAMBIL]->(c1:MataKuliah),
                   (m)-[:MENGAMBIL]->(c2:MataKuliah)
             WHERE c1 <> c2 AND c1.kode < c2.kode
             MERGE (c1)-[:BERTABRAKAN_MAHASISWA]->(c2)
-        """).consume()
-
+        """)
+        # Dosen
         session.run("""
             MATCH (d:User {role:'Dosen'})-[:MENGAJAR]->(c1:MataKuliah),
                   (d)-[:MENGAJAR]->(c2:MataKuliah)
             WHERE c1 <> c2 AND c1.kode < c2.kode
             MERGE (c1)-[:BERTABRAKAN_DOSEN]->(c2)
-        """).consume()
-
+        """)
+        # Ruangan
         session.run("""
             MATCH (c1:MataKuliah), (c2:MataKuliah)
             WHERE c1.ruangan IS NOT NULL AND c2.ruangan IS NOT NULL
               AND c1.ruangan = c2.ruangan AND c1.kode < c2.kode
             MERGE (c1)-[:BERTABRAKAN_RUANGAN]->(c2)
-        """).consume()
-
+        """)
         result = session.run("""
             MATCH (c1:MataKuliah)-[r]->(c2:MataKuliah)
-            WHERE type(r) IN ['BERTABRAKAN_MAHASISWA', 'BERTABRAKAN_DOSEN', 'BERTABRAKAN_RUANGAN']
+            WHERE type(r) IN ['BERTABRAKAN_MAHASISWA','BERTABRAKAN_DOSEN','BERTABRAKAN_RUANGAN']
             RETURN DISTINCT c1.kode AS mk1, c2.kode AS mk2
         """)
         return [(r["mk1"], r["mk2"]) for r in result]
@@ -81,23 +84,35 @@ def build_graph():
     duration = time.time() - start
     return G, duration
 
-def greedy_chromatic_number(G):
+# === GREEDY COLORING ===
+def greedy_coloring(G):
     start = time.time()
-    coloring = nx.coloring.greedy_color(G, strategy="largest_first")
+    coloring = {}
+    for node in G.nodes():
+        neighbor_colors = {coloring[neighbor] for neighbor in G.neighbors(node) if neighbor in coloring}
+        color = 0
+        while color in neighbor_colors:
+            color += 1
+        coloring[node] = color
+    chromatic_number = max(coloring.values()) + 1
     duration = time.time() - start
-    num_colors = max(coloring.values()) + 1 if coloring else 0
-    return num_colors, coloring, duration
+    return chromatic_number, coloring, duration
 
 def slot_to_hari_jam(slot):
-    hari_list = ['Senin','Selasa','Rabu','Kamis','Jumat','Sabtu']
-    hari = hari_list[slot % len(hari_list)]
-    jam_mulai = f"{8 + 2*(slot // len(hari_list)):02d}:00"
-    jam_selesai = f"{9 + 2*(slot // len(hari_list)):02d}:40"
-    return hari, jam_mulai, jam_selesai
+    if slot == 0:
+        return "Senin", "08:00", "09:40"
+    elif slot == 1:
+        return "Selasa", "08:00", "09:40"
+    elif slot == 2:
+        return "Rabu", "08:00", "09:40"
+    elif slot == 3:
+        return "Kamis", "08:00", "09:40"
+    else:
+        return "Jumat", "08:00", "09:40"
 
 def fetch_jadwal_info():
     data = defaultdict(list)
-    with driver.session() as session:
+    with get_session() as session:
         result = session.run("""
             MATCH (c:MataKuliah)-[:DIJADWALKAN]->(j:Jadwal)
             RETURN c.kode AS kode, j.hari AS hari, 
@@ -106,21 +121,20 @@ def fetch_jadwal_info():
         """)
         for r in result:
             data[int(r["slot"])].append({
-                "kode":      r["kode"],
-                "hari":      r["hari"],
+                "kode": r["kode"],
+                "hari": r["hari"],
                 "jam_mulai": r["jam_mulai"],
                 "jam_selesai": r["jam_selesai"],
-                "ruangan":   r["ruangan"]
+                "ruangan": r["ruangan"]
             })
     return data
 
 def render_colored_graph(G, coloring):
     plt.figure(figsize=(10, 8))
-    pos = nx.spring_layout(G, seed=42)  # posisi node
+    pos = nx.spring_layout(G, seed=42)
     colors = [coloring.get(node, 0) for node in G.nodes()]
     nx.draw(G, pos, with_labels=True, node_color=colors, cmap=plt.cm.Set3, node_size=800, font_size=10)
-    plt.title("Visualisasi Pewarnaan Graf")
-
+    plt.title("Visualisasi Pewarnaan Graf (Greedy)")
     img = io.BytesIO()
     plt.savefig(img, format='png')
     plt.close()
@@ -133,14 +147,10 @@ def render_colored_graph(G, coloring):
 @login_required
 def jadwal():
     total_start = time.time()
-
     G, time_graph = build_graph()
-    chromatic_num, pewarnaan, time_coloring = greedy_chromatic_number(G)
-
+    chromatic_num, pewarnaan, time_coloring = greedy_coloring(G)
     total_exec_time = time.time() - total_start
-
     graph_img = render_colored_graph(G, pewarnaan)
-
     latency = total_exec_time
     jumlah_konflik = G.number_of_edges()
     throughput = jumlah_konflik / latency if latency > 0 else 0
@@ -148,7 +158,7 @@ def jadwal():
     return render_template("index.html",
         slot_map=fetch_jadwal_info(),
         jumlah_simpul=G.number_of_nodes(),
-        jumlah_konflik=G.number_of_edges(),
+        jumlah_konflik=jumlah_konflik,
         chromatic_number=chromatic_num,
         pewarnaan=pewarnaan,
         nama=current_user.nama,
@@ -158,7 +168,7 @@ def jadwal():
         exec_coloring=f"{time_coloring:.4f} detik",
         graph_img=graph_img,
         latency=f"{latency:.4f} detik",
-        throughput=f"{throughput:.2f} edge/detik",
+        throughput=f"{throughput:.2f} edge/detik"
     )
 
 @app.route("/sinkron-pewarnaan", methods=["POST"])
@@ -169,12 +179,11 @@ def sinkron_pewarnaan():
         return redirect(url_for("jadwal"))
 
     G, _ = build_graph()
-    _, pewarnaan, _ = greedy_chromatic_number(G)
+    _, pewarnaan, _ = greedy_coloring(G)
 
-    with driver.session() as session:
+    with get_session() as session:
         for kode, slot in pewarnaan.items():
             hari, jam_mulai, jam_selesai = slot_to_hari_jam(slot)
-
             session.run("MATCH (c:MataKuliah {kode:$kode})-[r:DIJADWALKAN]->() DELETE r", kode=kode)
             session.run("""
                 MERGE (j:Jadwal {slot:$slot})
@@ -184,7 +193,7 @@ def sinkron_pewarnaan():
                 MERGE (c)-[:DIJADWALKAN]->(j)
             """, kode=kode, slot=slot, hari=hari, jam_mulai=jam_mulai, jam_selesai=jam_selesai)
 
-    flash("Jadwal disinkronkan sesuai pewarnaan.")
+    flash("Jadwal berhasil disinkronkan dengan hasil pewarnaan Greedy.")
     return redirect(url_for("jadwal"))
 
 @app.route("/login", methods=["GET", "POST"])
@@ -192,8 +201,8 @@ def login():
     error = None
     if request.method == "POST":
         uid = request.form["id"]
-        with driver.session() as s:
-            r = s.run("MATCH(u:User{id:$id}) RETURN u.id AS id, u.nama AS nama, u.role AS role", id=uid).single()
+        with get_session() as s:
+            r = s.run("MATCH (u:User {id:$id}) RETURN u.id AS id, u.nama AS nama, u.role AS role", id=uid).single()
         if not r:
             error = "User ID tidak ditemukan."
         else:
@@ -214,7 +223,7 @@ def list_mk():
     if current_user.role != "Admin":
         flash("Hanya admin yang diizinkan.")
         return redirect(url_for("jadwal"))
-    with driver.session() as s:
+    with get_session() as s:
         rows = s.run("MATCH (c:MataKuliah) RETURN c.kode AS kode, c.nama AS nama, c.ruangan AS ruangan")
         mk_list = [dict(kode=r["kode"], nama=r["nama"], ruangan=r["ruangan"]) for r in rows]
     return render_template("list_mk.html", mk_list=mk_list)
@@ -227,8 +236,8 @@ def add_mk():
         return redirect(url_for("jadwal"))
     if request.method == "POST":
         k, n, r = request.form["kode"], request.form["nama"], request.form["ruangan"]
-        with driver.session() as s:
-            s.run("CREATE (:MataKuliah {kode:$k,nama:$n,ruangan:$r})", k=k, n=n, r=r)
+        with get_session() as s:
+            s.run("CREATE (:MataKuliah {kode:$k, nama:$n, ruangan:$r})", k=k, n=n, r=r)
         return redirect(url_for("list_mk"))
     return render_template("form_mk.html", mode="Add", mk=None)
 
@@ -238,15 +247,15 @@ def edit_mk(kode):
     if current_user.role != "Admin":
         flash("Hanya admin yang diizinkan.")
         return redirect(url_for("jadwal"))
-    with driver.session() as s:
-        ex = s.run("MATCH (c:MataKuliah{kode:$k}) RETURN c.kode AS kode, c.nama AS nama, c.ruangan AS ruangan", k=kode).single()
+    with get_session() as s:
+        ex = s.run("MATCH (c:MataKuliah {kode:$k}) RETURN c.kode AS kode, c.nama AS nama, c.ruangan AS ruangan", k=kode).single()
     if not ex:
-        flash("MataKuliah tidak ditemukan.")
+        flash("Mata kuliah tidak ditemukan.")
         return redirect(url_for("list_mk"))
     if request.method == "POST":
         n, r = request.form["nama"], request.form["ruangan"]
-        with driver.session() as s:
-            s.run("MATCH (c:MataKuliah{kode:$k}) SET c.nama=$n,c.ruangan=$r", k=kode, n=n, r=r)
+        with get_session() as s:
+            s.run("MATCH (c:MataKuliah {kode:$k}) SET c.nama=$n, c.ruangan=$r", k=kode, n=n, r=r)
         return redirect(url_for("list_mk"))
     return render_template("form_mk.html", mode="Edit", mk=dict(kode=ex["kode"], nama=ex["nama"], ruangan=ex["ruangan"]))
 
@@ -256,8 +265,8 @@ def delete_mk(kode):
     if current_user.role != "Admin":
         flash("Hanya admin yang diizinkan.")
         return redirect(url_for("jadwal"))
-    with driver.session() as s:
-        s.run("MATCH (c:MataKuliah{kode:$k}) DETACH DELETE c", k=kode)
+    with get_session() as s:
+        s.run("MATCH (c:MataKuliah {kode:$k}) DETACH DELETE c", k=kode)
     return redirect(url_for("list_mk"))
 
 if __name__ == "__main__":
